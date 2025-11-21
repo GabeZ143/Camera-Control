@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { ApiBuilder } from "./components/ApiBuilder";
+import { CGI_OPERATIONS } from "./config/cgiOperations";
 
 const ENDPOINTS = [
   { id: "param", label: "param.cgi (Config)", path: "/cgi-bin/param.cgi" },
@@ -16,311 +18,306 @@ const ENDPOINTS = [
 ];
 
 function App() {
-  const [ip, setIp] = useState("10.20.2.121");
-  const [port, setPort] = useState("80");
-  const [protocol, setProtocol] = useState("http");
-  const [endpointId, setEndpointId] = useState("param");
-  const [method, setMethod] = useState("GET");
 
-  const [action, setAction] = useState("get");
-  const [type, setType] = useState("deviceInfo");
-  const [cameraID, setCameraID] = useState("");
+  const [steps, setSteps] = useState([
+    { id: 1, builtStep: null },  // start with one blank builder
+  ]);
 
-  // Extra query params (key=value per line)
-  const [extraParamsText, setExtraParamsText] = useState("");
+   const [connection, setConnection] = useState({
+    protocol: "http",
+    ip: "10.20.2.121",
+    port: 80,
+    username: "admin",
+    password: "admin",
+  });
 
-  // Optional auth
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-
-  const [requestPreview, setRequestPreview] = useState(null);
-  const [response, setResponse] = useState(null);
+  const [bundleResult, setBundleResult] = useState(null);
+  const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
 
-  const selectedEndpoint = ENDPOINTS.find((e) => e.id === endpointId);
-
-  const buildQueryObject = () => {
-    const query = {};
-
-    if (action) query.action = action;
-    if (type) query.type = type;
-    if (cameraID) query.cameraID = cameraID;
-
-    // Parse extra params: "key=value" per line
-    extraParamsText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && line.includes("="))
-      .forEach((line) => {
-        const [key, value] = line.split("=");
-        if (key) {
-          query[key.trim()] = (value || "").trim();
-        }
-      });
-
-    return query;
+  const addStep = () => {
+    setSteps((prev) => [
+      ...prev,
+      { id: Date.now(), builtStep: null }, // simple unique id
+    ]);
   };
 
-  const sendRequest = async () => {
-    if (!selectedEndpoint) return;
+  const removeStep = (id) => {
+    setSteps((prev) => prev.filter((step) => step.id !== id));
+  };
 
-    setLoading(true);
+  const handleStepChange = (id, builtStep) => {
+    setSteps((prev) =>
+      prev.map((step) =>
+        step.id === id ? { ...step, builtStep } : step
+      )
+    );
+  };
+
+ const handleRunBundle = async () => {
     setError(null);
-    setResponse(null);
+    setBundleResult(null);
 
-    const query = buildQueryObject();
+    const validSteps = steps
+      .map((s) => s.builtStep)
+      .filter((s) => s != null);
 
-    const body = {
-      protocol,
-      ip,
-      path: selectedEndpoint.path,
-      method,
-      query,
-    };
-
-    if (port) {
-      body.port = Number(port);
+    if (validSteps.length === 0) {
+      setError("No valid steps configured.");
+      return;
     }
 
-    if (username && password) {
-      body.auth = { username, password };
-    }
-
-    setRequestPreview(body);
-
+    setIsRunning(true);
     try {
-      const res = await fetch("http://localhost:3000/api/camera/proxy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const response = await fetch(
+        "http://localhost:3000/api/camera/bundle",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            connection,
+            steps: validSteps,
+          }),
+        }
+      );
 
-      const data = await res.json();
+      const data = await response.json();
 
-      if (!res.ok || data.success === false) {
-        throw new Error(
-          data.message || data.proxyError || `HTTP ${res.status}`
+      if (!response.ok) {
+        setError(
+          data?.error ||
+            `Bundle request failed with status ${response.status}`
         );
+      } else {
+        setBundleResult(data);
       }
-
-      setResponse(data);
     } catch (err) {
-      setError(err.message);
+      console.error("Bundle run error:", err);
+      setError(err.message || "Unknown error");
     } finally {
-      setLoading(false);
+      setIsRunning(false);
     }
+  };
+
+  const handleConnectionChange = (field, value) => {
+    setConnection((prev) => ({
+      ...prev,
+      [field]: field === "port" ? Number(value) || 0 : value,
+    }));
   };
 
   return (
-    <div style={{ padding: "1rem", fontFamily: "sans-serif", maxWidth: 1000 }}>
-      <h1>Sunell Camera API Tester</h1>
+    <div style={{ padding: "1rem", fontFamily: "sans-serif" }}>
 
-      {/* Camera connection settings */}
+      <h1>Sunell Camera API Builder</h1>
+
       <div
         style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: "0.75rem",
+          border: "1px solid #ccc",
+          borderRadius: 8,
+          padding: "1rem",
           marginBottom: "1rem",
         }}
       >
-        <label>
-          Camera IP:
-          <input
-            value={ip}
-            onChange={(e) => setIp(e.target.value)}
-            style={{ width: "100%" }}
-          />
-        </label>
+        <h2>Camera Connection</h2>
 
-        <label>
-          Port:
-          <input
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-            style={{ width: "100%" }}
-          />
-        </label>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Protocol:&nbsp;
+            <select
+              value={connection.protocol}
+              onChange={(e) => handleConnectionChange("protocol", e.target.value)}
+            >
+              <option value="http">http</option>
+              <option value="https">https</option>
+            </select>
+          </label>
+        </div>
 
-        <label>
-          Protocol:
-          <select
-            value={protocol}
-            onChange={(e) => setProtocol(e.target.value)}
-            style={{ width: "100%" }}
-          >
-            <option value="http">http</option>
-            <option value="https">https</option>
-          </select>
-        </label>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            IP:&nbsp;
+            <input
+              type="text"
+              value={connection.ip}
+              onChange={(e) => handleConnectionChange("ip", e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Port:&nbsp;
+            <input
+              type="number"
+              value={connection.port}
+              onChange={(e) => handleConnectionChange("port", e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Username:&nbsp;
+            <input
+              type="text"
+              value={connection.username}
+              onChange={(e) => handleConnectionChange("username", e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Password:&nbsp;
+            <input
+              type="password"
+              value={connection.password}
+              onChange={(e) => handleConnectionChange("password", e.target.value)}
+            />
+          </label>
+        </div>
       </div>
 
-      {/* Endpoint + method */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: "0.75rem",
-          marginBottom: "1rem",
-        }}
-      >
-        <label>
-          CGI Endpoint:
-          <select
-            value={endpointId}
-            onChange={(e) => setEndpointId(e.target.value)}
-            style={{ width: "100%" }}
-          >
-            {ENDPOINTS.map((ep) => (
-              <option key={ep.id} value={ep.id}>
-                {ep.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          HTTP Method:
-          <select
-            value={method}
-            onChange={(e) => setMethod(e.target.value)}
-            style={{ width: "100%" }}
-          >
-            <option value="GET">GET</option>
-            <option value="POST">POST</option>
-          </select>
-        </label>
-      </div>
-
-      {/* Common query params: action, type, cameraID */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: "0.75rem",
-          marginBottom: "1rem",
-        }}
-      >
-        <label>
-          action:
-          <input
-            value={action}
-            onChange={(e) => setAction(e.target.value)}
-            placeholder="e.g. get, set, up, down, query"
-            style={{ width: "100%" }}
-          />
-        </label>
-
-        <label>
-          type:
-          <input
-            value={type}
-            onChange={(e) => setType(e.target.value)}
-            placeholder="e.g. deviceInfo, localNetwork, ptzCap"
-            style={{ width: "100%" }}
-          />
-        </label>
-
-        <label>
-          cameraID:
-          <input
-            value={cameraID}
-            onChange={(e) => setCameraID(e.target.value)}
-            placeholder="e.g. 1"
-            style={{ width: "100%" }}
-          />
-        </label>
-      </div>
-
-      {/* Extra params */}
-      <div style={{ marginBottom: "1rem" }}>
-        <label>
-          Extra query params (key=value per line):
-          <textarea
-            value={extraParamsText}
-            onChange={(e) => setExtraParamsText(e.target.value)}
-            rows={4}
-            style={{ width: "100%", fontFamily: "monospace" }}
-            placeholder={`Example:\nNtpServer=ntp.aliyun.com\nNtpPort=123`}
-          />
-        </label>
-      </div>
-
-      {/* Optional auth */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: "0.75rem",
-          marginBottom: "1rem",
-        }}
-      >
-        <label>
-          Username (optional):
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            style={{ width: "100%" }}
-          />
-        </label>
-
-        <label>
-          Password (optional):
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ width: "100%" }}
-          />
-        </label>
-      </div>
-
-      <button onClick={sendRequest} disabled={loading}>
-        {loading ? "Sending..." : "Send Request"}
-      </button>
-
-      {/* Debug: show request body */}
-      {requestPreview && (
-        <div style={{ marginTop: "1.5rem" }}>
-          <h3>Request Body (to backend)</h3>
-          <pre
+      {/* List of ApiBuilder components */}
+      {steps.map((step, index) => (
+        <div
+          key={step.id}
+          style={{
+            border: "1px solid #ddd",
+            borderRadius: 8,
+            padding: "0.75rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <div
             style={{
-              background: "#f4f4f4",
-              padding: "1rem",
-              borderRadius: "4px",
-              maxHeight: "200px",
-              overflow: "auto",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "0.5rem",
             }}
           >
-            {JSON.stringify(requestPreview, null, 2)}
-          </pre>
+            <h3 style={{ margin: 0 }}>Step {index + 1}</h3>
+            {steps.length > 1 && (
+              <button onClick={() => removeStep(step.id)}>
+                Remove
+              </button>
+            )}
+          </div>
+
+          <ApiBuilder
+            operations={CGI_OPERATIONS}
+            onChange={(builtStep) => handleStepChange(step.id, builtStep)}
+          />
+        </div>
+      ))}
+
+      <button onClick={addStep} style={{ marginRight: "0.5rem" }}>
+        + Add Step
+      </button>
+
+      <button onClick={handleRunBundle}>
+        Run Bundle
+      </button>
+
+      <div style={{ marginTop: "1.5rem" }}>
+        <h2>Current Bundle Snapshot</h2>
+        <pre
+          style={{
+            background: "#f5f5f5",
+            padding: "0.75rem",
+            borderRadius: 4,
+            fontSize: "0.8rem",
+          }}
+        >
+{JSON.stringify(
+  steps.map((s) => s.builtStep),
+  null,
+  2
+)}
+        </pre>
+      </div>
+
+      {error && (
+        <div style={{ marginTop: "1rem", color: "red" }}>
+          <h2>Bundle Error</h2>
+          <p>{error}</p>
         </div>
       )}
 
-      {/* Error / response */}
-      <div style={{ marginTop: "1.5rem" }}>
-        {error && <p style={{ color: "red" }}>Error: {error}</p>}
+      {isRunning && (
+        <div
+          style={{
+            marginTop: "1rem",
+            padding: "0.75rem",
+            background: "#eef",
+            borderRadius: 6,
+            border: "1px solid #99f",
+            fontWeight: "bold",
+          }}
+        >
+          Running bundle… please wait.
+        </div>
+      )}
 
-        {response && (
-          <div>
-            <h3>Camera Response (via backend)</h3>
-            <pre
-              style={{
-                background: "#f4f4f4",
-                padding: "1rem",
-                borderRadius: "4px",
-                maxHeight: "400px",
-                overflow: "auto",
-              }}
-            >
-              {JSON.stringify(response, null, 2)}
-            </pre>
-          </div>
-        )}
-      </div>
+      {bundleResult && (
+        <div style={{ marginTop: "1.5rem" }}>
+          <h2>Bundle Results</h2>
+
+          {Array.isArray(bundleResult.results) &&
+            bundleResult.results.map((r, idx) => (
+              <div
+                key={idx}
+                style={{
+                  border: "1px solid #ccc",
+                  borderRadius: 8,
+                  padding: "0.75rem",
+                  marginBottom: "0.75rem",
+                  background: r.ok ? "#f5fff5" : "#fff5f5",
+                }}
+              >
+                <h3 style={{ marginTop: 0 }}>
+                  Step {idx + 1}: {r.label || r.operationId}
+                </h3>
+                <p>
+                  Status:{" "}
+                  <strong style={{ color: r.ok ? "green" : "red" }}>
+                    {r.ok ? "OK" : "ERROR"}
+                  </strong>
+                </p>
+
+                {r.status && (
+                  <p style={{ margin: 0 }}>HTTP Status: {r.status}</p>
+                )}
+
+                {r.error && (
+                  <p style={{ margin: 0 }}>Error: {r.error}</p>
+                )}
+
+                <details style={{ marginTop: "0.5rem" }}>
+                  <summary>Raw Data</summary>
+                  <pre
+                    style={{
+                      background: "#f5f5f5",
+                      padding: "0.5rem",
+                      borderRadius: 4,
+                      fontSize: "0.8rem",
+                      overflow: "auto",
+                    }}
+                  >
+{JSON.stringify(r.data, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   );
+
 }
 
 export default App;
