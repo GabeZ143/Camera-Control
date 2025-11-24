@@ -3,6 +3,8 @@ const cors = require("cors");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const multer = require("multer");
 
 const app = express();
 const PORT = 3000;
@@ -15,6 +17,26 @@ const STORAGE_DIR = path.join(__dirname, "storage");
 if (!fs.existsSync(STORAGE_DIR)) {
   fs.mkdirSync(STORAGE_DIR, { recursive: true });
 }
+
+// Create firmware directory if it doesn't exist
+const FIRMWARE_DIR = path.join(__dirname, "firmware");
+if (!fs.existsSync(FIRMWARE_DIR)) {
+  fs.mkdirSync(FIRMWARE_DIR, { recursive: true });
+}
+
+// Configure multer for firmware uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, FIRMWARE_DIR);
+  },
+  filename: (req, file, cb) => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const originalName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_");
+    cb(null, `firmware_${timestamp}_${originalName}`);
+  },
+});
+
+const upload = multer({ storage });
 
 // Operations that return binary/large data
 const BINARY_OPERATIONS = ["record.playback"];
@@ -126,8 +148,65 @@ app.get("/storage/:filename", (req, res) => {
   fileStream.pipe(res);
 });
 
+// Firmware upload endpoint with checksum verification
+app.post("/api/firmware/upload", upload.single("firmware"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    const clientChecksum = req.body.checksum;
+    if (!clientChecksum) {
+      // Clean up uploaded file if checksum is missing
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: "Checksum not provided" });
+    }
+
+    // Calculate checksum of received file
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const hash = crypto.createHash("sha256");
+    hash.update(fileBuffer);
+    const serverChecksum = hash.digest("hex");
+
+    // Compare checksums
+    if (clientChecksum !== serverChecksum) {
+      // Clean up uploaded file if checksums don't match
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({
+        error: "Checksum mismatch",
+        clientChecksum,
+        serverChecksum,
+        message: "File integrity check failed. The file may have been corrupted during upload.",
+      });
+    }
+
+    // Checksums match - file is valid
+    res.json({
+      success: true,
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      size: req.file.size,
+      checksum: serverChecksum,
+      message: "Firmware uploaded and verified successfully",
+    });
+  } catch (err) {
+    console.error("Firmware upload error:", err);
+    
+    // Clean up file if it exists and there was an error
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+
+    res.status(500).json({
+      error: "Firmware upload failed",
+      message: err.message,
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
   console.log(`Storage directory: ${STORAGE_DIR}`);
+  console.log(`Firmware directory: ${FIRMWARE_DIR}`);
 });
 
