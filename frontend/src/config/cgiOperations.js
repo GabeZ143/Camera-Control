@@ -317,8 +317,9 @@ export const CGI_OPERATIONS = [
     fixedParams: { action: "playBack" },
     fields: [
       { name: "cameraID", label: "Camera ID", type: "number", required: false, defaultValue: 1 },
-      { name: "startTime", label: "Start Time", type: "text", required: false },
-      { name: "endTime", label: "End Time", type: "text", required: false },
+      { name: "streamID", label: "Stream ID", type: "number", required: false, defaultValue: 1 },
+      { name: "startTime", label: "Start Time", type: "text", required: false, placeholder: "YYYYMMDDhhmmss" },
+      { name: "endTime", label: "End Time", type: "text", required: false, placeholder: "YYYYMMDDhhmmss" },
     ],
   },
 

@@ -12,3 +12,6 @@ build/
 # Misc
 .DS_Store
 npm-debug.log*
+
+# Storage
+backend/storage/
