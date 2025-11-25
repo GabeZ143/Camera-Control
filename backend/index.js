@@ -130,6 +130,12 @@ app.post("/api/camera/bundle", async (req, res) => {
   res.json({ results });
 });
 
+// Endpoint to display all stored files
+app.get("/storage", (req, res) => {
+  const files = fs.readdirSync(STORAGE_DIR);
+  res.json({ files });
+});
+
 // Endpoint to serve stored files
 app.get("/storage/:filename", (req, res) => {
   const filename = req.params.filename;
