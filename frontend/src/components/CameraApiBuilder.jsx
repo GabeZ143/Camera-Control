@@ -94,7 +94,7 @@ function CameraApiBuilder() {
 
   return (
     <div style={{ padding: "1rem", fontFamily: "sans-serif" }}>
-      <h1>Sunell Camera API Builder</h1>
+      <h1>Camera API Builder</h1>
 
       <div
         style={{

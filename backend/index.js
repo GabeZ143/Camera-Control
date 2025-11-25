@@ -18,6 +18,12 @@ if (!fs.existsSync(STORAGE_DIR)) {
   fs.mkdirSync(STORAGE_DIR, { recursive: true });
 }
 
+// Create images directory within storage if it doesn't exist
+const IMAGES_DIR = path.join(STORAGE_DIR, "images");
+if (!fs.existsSync(IMAGES_DIR)) {
+  fs.mkdirSync(IMAGES_DIR, { recursive: true });
+}
+
 // Create firmware directory if it doesn't exist
 const FIRMWARE_DIR = path.join(__dirname, "firmware");
 if (!fs.existsSync(FIRMWARE_DIR)) {
@@ -41,6 +47,10 @@ const upload = multer({ storage });
 // Operations that return binary/large data
 const BINARY_OPERATIONS = ["record.playback"];
 
+// Operations that return image data
+const IMAGE_OPERATIONS = ["image.snapshot", "image.snapStream"];
+
+
 async function callCameraStep(connection, step) {
   const { protocol, ip, port, username, password } = connection;
   const { cgiPath, method, query, operationId, saveToStorage } = step;
@@ -50,7 +60,8 @@ async function callCameraStep(connection, step) {
 
   // Check if this operation typically returns binary data
   const isBinaryOperation = BINARY_OPERATIONS.includes(operationId);
-  const shouldSave = saveToStorage === true || (saveToStorage === undefined && isBinaryOperation);
+  const isImageOperation = IMAGE_OPERATIONS.includes(operationId);
+  const shouldSave = saveToStorage === true || (saveToStorage === undefined && (isBinaryOperation || isImageOperation));
 
   const axiosConfig = {
     url,
@@ -59,14 +70,33 @@ async function callCameraStep(connection, step) {
     params: query || {},
     // optional auth
     auth: username && password ? { username, password } : undefined,
-    // For binary operations, get the raw response
+    // For binary/image operations, get the raw response
     responseType: shouldSave ? "arraybuffer" : "json",
     // you can tweak timeout / validateStatus here if needed
   };
 
   const response = await axios(axiosConfig);
 
-  // If we should save this data (binary/large response)
+  // If this is an image operation, save it as PNG to images folder
+  if (isImageOperation && Buffer.isBuffer(response.data)) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `${operationId || "image"}_${timestamp}.jpg`;
+    const filepath = path.join(IMAGES_DIR, filename);
+
+    fs.writeFileSync(filepath, response.data);
+
+    // Return metadata instead of the binary data
+    return {
+      saved: true,
+      filename,
+      filepath: `/storage/images/${filename}`, // relative path for API access
+      size: response.data.length,
+      contentType: response.headers["content-type"] || "image/png",
+      message: `Image saved to ${filename}`,
+    };
+  }
+
+  // If we should save this data (binary/large response - like recordings)
   if (shouldSave && Buffer.isBuffer(response.data)) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `${operationId || "recording"}_${timestamp}.h264`;
@@ -130,26 +160,59 @@ app.post("/api/camera/bundle", async (req, res) => {
   res.json({ results });
 });
 
-// Endpoint to display all stored files
+// Endpoint to display all stored files (including images)
 app.get("/storage", (req, res) => {
-  const files = fs.readdirSync(STORAGE_DIR);
-  res.json({ files });
+  const files = fs.readdirSync(STORAGE_DIR).filter(file => {
+    // Exclude the images directory from the main listing
+    const filePath = path.join(STORAGE_DIR, file);
+    return fs.statSync(filePath).isFile();
+  });
+  
+  // Get image files
+  const imageFiles = fs.existsSync(IMAGES_DIR) 
+    ? fs.readdirSync(IMAGES_DIR).map(file => `images/${file}`)
+    : [];
+  
+  res.json({ files: [...files, ...imageFiles] });
 });
 
-// Endpoint to serve stored files
+// Endpoint to serve stored files (including images)
 app.get("/storage/:filename", (req, res) => {
-  const filename = req.params.filename;
-  const filepath = path.join(STORAGE_DIR, filename);
+  let filename = req.params.filename;
+  let filepath;
+
+  // Check if it's an image file (from images subdirectory)
+  if (filename.startsWith("images/")) {
+    const imageFilename = filename.replace("images/", "");
+    filepath = path.join(IMAGES_DIR, imageFilename);
+  } else {
+    filepath = path.join(STORAGE_DIR, filename);
+  }
 
   if (!fs.existsSync(filepath)) {
     return res.status(404).json({ error: "File not found" });
   }
 
-  // Set appropriate headers for video file
-  res.setHeader("Content-Type", "video/h264");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  // Determine content type based on file extension
+  const ext = path.extname(filepath).toLowerCase();
+  let contentType = "application/octet-stream";
+  let contentDisposition = `attachment; filename="${path.basename(filename)}"`;
 
-  // Stream the file
+  if (ext === ".png" || ext === ".jpg" || ext === ".jpeg") {
+    contentType = ext === ".png" ? "image/png" : "image/jpeg";
+    contentDisposition = `inline; filename="${path.basename(filename)}"`;
+  } else if (ext === ".h264" || ext === ".mp4") {
+    contentType = "video/h264";
+  }
+
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Disposition", contentDisposition);
+
+  // For image files, force download by setting Content-Disposition to attachment
+  // (the header is already set above; just stream the file)
+  if (ext === ".png" || ext === ".jpg" || ext === ".jpeg") {
+    res.setHeader("Content-Disposition", `attachment; filename="${path.basename(filename)}"`);
+  }
   const fileStream = fs.createReadStream(filepath);
   fileStream.pipe(res);
 });
@@ -213,6 +276,7 @@ app.post("/api/firmware/upload", upload.single("firmware"), async (req, res) => 
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
   console.log(`Storage directory: ${STORAGE_DIR}`);
+  console.log(`Images directory: ${IMAGES_DIR}`);
   console.log(`Firmware directory: ${FIRMWARE_DIR}`);
 });
 
