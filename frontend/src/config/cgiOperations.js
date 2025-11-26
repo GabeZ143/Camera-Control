@@ -320,6 +320,7 @@ export const CGI_OPERATIONS = [
       { name: "streamID", label: "Stream ID", type: "number", required: false, defaultValue: 1 },
       { name: "startTime", label: "Start Time", type: "text", required: false, placeholder: "YYYYMMDDhhmmss" },
       { name: "endTime", label: "End Time", type: "text", required: false, placeholder: "YYYYMMDDhhmmss" },
+      { name: "storageFolder", label: "Storage Folder", type: "text", required: false, placeholder: "Optional folder/tag for organizing files" },
     ],
   },
 
@@ -338,6 +339,7 @@ export const CGI_OPERATIONS = [
     fields: [
       { name: "cameraID", label: "Camera ID", type: "number", required: true, defaultValue: 1 },
       { name: "quality", label: "Quality (1-10)", type: "number", required: true, defaultValue: 5 },
+      { name: "storageFolder", label: "Storage Folder", type: "text", required: false, placeholder: "Optional folder/tag for organizing files" },
     ],
   },
 
@@ -353,6 +355,7 @@ export const CGI_OPERATIONS = [
       { name: "cameraID", label: "Camera ID", type: "number", required: true, defaultValue: 1 },
       { name: "streamID", label: "Stream ID", type: "number", required: true, defaultValue: 1 },
       { name: "quality", label: "Quality", type: "number", required: true, defaultValue: 5 },
+      { name: "storageFolder", label: "Storage Folder", type: "text", required: false, placeholder: "Optional folder/tag for organizing files" },
     ],
   },
 

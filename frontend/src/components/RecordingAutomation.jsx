@@ -182,6 +182,11 @@ function RecordingAutomation() {
   // Preview
   const [previewClips, setPreviewClips] = useState([]);
 
+  // Execution state
+  const [isRunning, setIsRunning] = useState(false);
+  const [executionResult, setExecutionResult] = useState(null);
+  const [executionError, setExecutionError] = useState(null);
+
   const handleConnectionChange = (field, value) => {
     setConnection((prev) => ({
       ...prev,
@@ -316,6 +321,11 @@ function RecordingAutomation() {
           query[field.name] = clip.startTime;
         } else if (field.name === "endTime") {
           query[field.name] = clip.endTime;
+        } else if (field.name === "storageFolder") {
+          // Use storageFolder from component state if provided
+          if (storageFolder && storageFolder.trim()) {
+            query[field.name] = storageFolder.trim();
+          }
         } else if (field.defaultValue !== undefined) {
           // Use default value if available
           query[field.name] = field.defaultValue;
@@ -362,6 +372,7 @@ function RecordingAutomation() {
         clipDurationUnit,
         cameraID,
         streamID,
+        storageFolder: storageFolder.trim() || null,
         totalClips: previewClips.length,
       },
     };
@@ -376,6 +387,50 @@ function RecordingAutomation() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const handleRunNow = async () => {
+    if (previewClips.length === 0) {
+      alert("Please generate preview first");
+      return;
+    }
+
+    setExecutionError(null);
+    setExecutionResult(null);
+    setIsRunning(true);
+
+    try {
+      const response = await fetch(
+        "http://localhost:3000/api/camera/recording-automation",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            connection,
+            clips: previewClips,
+            storageFolder: storageFolder.trim() || null, // For backward compatibility with recording-automation endpoint
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setExecutionError(
+          data?.error ||
+            `Request failed with status ${response.status}`
+        );
+      } else {
+        setExecutionResult(data);
+      }
+    } catch (err) {
+      console.error("Recording automation error:", err);
+      setExecutionError(err.message || "Unknown error");
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   // Format timestamp for display (YYYYMMDDhhmmss -> YYYY-MM-DD HH:mm:ss)
@@ -670,6 +725,22 @@ function RecordingAutomation() {
             />
           </label>
         </div>
+
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Storage Folder (optional):&nbsp;
+            <input
+              type="text"
+              value={storageFolder}
+              onChange={(e) => setStorageFolder(e.target.value)}
+              placeholder="e.g., test_batch_2025_11_19_26"
+              style={{ width: "300px" }}
+            />
+          </label>
+          <div style={{ fontSize: "0.85rem", color: "#666", marginTop: "0.25rem" }}>
+            Optional folder/tag for organizing saved recordings
+          </div>
+        </div>
       </div>
 
       {/* Output */}
@@ -778,15 +849,124 @@ function RecordingAutomation() {
 
       {/* Actions */}
       <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem" }}>
-        <button onClick={handleGenerateSteps} disabled={previewClips.length === 0}>
+        <button onClick={handleGenerateSteps} disabled={previewClips.length === 0 || isRunning}>
           Generate Steps (Export JSON)
         </button>
         {outputAction === "runNow" && (
-          <button disabled style={{ opacity: 0.5 }}>
-            Run Now (Coming in Phase 2)
+          <button 
+            onClick={handleRunNow} 
+            disabled={previewClips.length === 0 || isRunning}
+            style={{ 
+              opacity: (previewClips.length === 0 || isRunning) ? 0.5 : 1,
+              background: isRunning ? "#ffa500" : undefined,
+            }}
+          >
+            {isRunning ? "Running..." : "Run Now"}
           </button>
         )}
       </div>
+
+      {/* Execution Status */}
+      {isRunning && (
+        <div
+          style={{
+            marginTop: "1rem",
+            padding: "0.75rem",
+            background: "#eef",
+            borderRadius: 6,
+            border: "1px solid #99f",
+            fontWeight: "bold",
+          }}
+        >
+          Running recording automation... Please wait. This may take a while.
+        </div>
+      )}
+
+      {executionError && (
+        <div style={{ marginTop: "1rem", color: "red" }}>
+          <h2>Execution Error</h2>
+          <p>{executionError}</p>
+        </div>
+      )}
+
+      {executionResult && (
+        <div style={{ marginTop: "1.5rem" }}>
+          <h2>Execution Results</h2>
+          <div style={{ marginBottom: "0.5rem" }}>
+            <p>
+              <strong>Total Clips:</strong> {executionResult.totalClips}
+            </p>
+            <p>
+              <strong>Successful:</strong>{" "}
+              <span style={{ color: "green" }}>
+                {executionResult.successCount}
+              </span>
+            </p>
+            <p>
+              <strong>Failed:</strong>{" "}
+              <span style={{ color: "red" }}>
+                {executionResult.failureCount}
+              </span>
+            </p>
+            {executionResult.storageFolder && (
+              <p>
+                <strong>Storage Folder:</strong> {executionResult.storageFolder}
+              </p>
+            )}
+          </div>
+
+          <div style={{ maxHeight: "400px", overflowY: "auto", border: "1px solid #ddd", borderRadius: 4 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
+              <thead>
+                <tr style={{ background: "#f5f5f5", position: "sticky", top: 0 }}>
+                  <th style={{ padding: "0.5rem", border: "1px solid #ddd", textAlign: "left" }}>#</th>
+                  <th style={{ padding: "0.5rem", border: "1px solid #ddd", textAlign: "left" }}>Start Time</th>
+                  <th style={{ padding: "0.5rem", border: "1px solid #ddd", textAlign: "left" }}>End Time</th>
+                  <th style={{ padding: "0.5rem", border: "1px solid #ddd", textAlign: "left" }}>Status</th>
+                  <th style={{ padding: "0.5rem", border: "1px solid #ddd", textAlign: "left" }}>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {executionResult.results.map((result, idx) => (
+                  <tr key={idx}>
+                    <td style={{ padding: "0.5rem", border: "1px solid #ddd" }}>
+                      {result.clipIndex}/{result.totalClips}
+                    </td>
+                    <td style={{ padding: "0.5rem", border: "1px solid #ddd" }}>
+                      {formatTimestampForDisplay(result.startTime)}
+                    </td>
+                    <td style={{ padding: "0.5rem", border: "1px solid #ddd" }}>
+                      {formatTimestampForDisplay(result.endTime)}
+                    </td>
+                    <td style={{ padding: "0.5rem", border: "1px solid #ddd" }}>
+                      <strong style={{ color: result.ok ? "green" : "red" }}>
+                        {result.ok ? "OK" : "ERROR"}
+                      </strong>
+                    </td>
+                    <td style={{ padding: "0.5rem", border: "1px solid #ddd" }}>
+                      {result.ok ? (
+                        result.data?.filepath ? (
+                          <span style={{ fontSize: "0.85rem", color: "#666" }}>
+                            Saved: {result.data.filename}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: "0.85rem", color: "#666" }}>
+                            {result.data?.message || "Success"}
+                          </span>
+                        )
+                      ) : (
+                        <span style={{ fontSize: "0.85rem", color: "red" }}>
+                          {result.error}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
