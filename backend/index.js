@@ -24,6 +24,12 @@ if (!fs.existsSync(IMAGES_DIR)) {
   fs.mkdirSync(IMAGES_DIR, { recursive: true });
 }
 
+// Create recordings directory within storage if it doesn't exist
+const RECORDINGS_DIR = path.join(STORAGE_DIR, "recordings");
+if (!fs.existsSync(RECORDINGS_DIR)) {
+  fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+}
+
 // Create firmware directory if it doesn't exist
 const FIRMWARE_DIR = path.join(__dirname, "firmware");
 if (!fs.existsSync(FIRMWARE_DIR)) {
@@ -100,7 +106,7 @@ async function callCameraStep(connection, step) {
   if (shouldSave && Buffer.isBuffer(response.data)) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `${operationId || "recording"}_${timestamp}.h264`;
-    const filepath = path.join(STORAGE_DIR, filename);
+    const filepath = path.join(RECORDINGS_DIR, filename);
 
     fs.writeFileSync(filepath, response.data);
 
@@ -108,7 +114,7 @@ async function callCameraStep(connection, step) {
     return {
       saved: true,
       filename,
-      filepath: `/storage/${filename}`, // relative path for API access
+      filepath: `/storage/recordings/${filename}`, // relative path for API access
       size: response.data.length,
       contentType: response.headers["content-type"] || "video/h264",
       message: `Recording saved to ${filename}`,
@@ -160,47 +166,84 @@ app.post("/api/camera/bundle", async (req, res) => {
   res.json({ results });
 });
 
-// Endpoint to display all stored files (including images)
+// Endpoint to get all directories in storage
 app.get("/storage", (req, res) => {
-  const files = fs.readdirSync(STORAGE_DIR).filter(file => {
-    // Exclude the images directory from the main listing
-    const filePath = path.join(STORAGE_DIR, file);
-    return fs.statSync(filePath).isFile();
-  });
-  
-  // Get image files
-  const imageFiles = fs.existsSync(IMAGES_DIR) 
-    ? fs.readdirSync(IMAGES_DIR).map(file => `images/${file}`)
-    : [];
-  
-  res.json({ files: [...files, ...imageFiles] });
+  try {
+    const items = fs.readdirSync(STORAGE_DIR);
+    const directories = items.filter(item => {
+      const itemPath = path.join(STORAGE_DIR, item);
+      return fs.statSync(itemPath).isDirectory();
+    });
+    
+    res.json({ directories });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to read storage directory", message: err.message });
+  }
 });
 
-// Endpoint to serve stored files (including images)
-app.get("/storage/:filename", (req, res) => {
-  let filename = req.params.filename;
-  let filepath;
-
-  // Check if it's an image file (from images subdirectory)
-  if (filename.startsWith("images/")) {
-    const imageFilename = filename.replace("images/", "");
-    filepath = path.join(IMAGES_DIR, imageFilename);
-  } else {
-    filepath = path.join(STORAGE_DIR, filename);
+// Endpoint to get files from a specific directory
+app.get("/storage/:directory", (req, res) => {
+  const directory = req.params.directory;
+  
+  // Validate directory name to prevent directory traversal
+  if (directory.includes("..") || directory.includes("/") || directory.includes("\\")) {
+    return res.status(400).json({ error: "Invalid directory name" });
   }
+  
+  const directoryPath = path.join(STORAGE_DIR, directory);
+  
+  // Check if directory exists
+  if (!fs.existsSync(directoryPath)) {
+    return res.status(404).json({ error: "Directory not found" });
+  }
+  
+  // Check if it's actually a directory
+  if (!fs.statSync(directoryPath).isDirectory()) {
+    return res.status(400).json({ error: "Not a directory" });
+  }
+  
+  try {
+    const files = fs.readdirSync(directoryPath).filter(file => {
+      const filePath = path.join(directoryPath, file);
+      return fs.statSync(filePath).isFile();
+    });
+    
+    res.json({ directory, files });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to read directory", message: err.message });
+  }
+});
 
+// Endpoint to serve stored files from directories
+app.get("/storage/:directory/:filename", (req, res) => {
+  const directory = req.params.directory;
+  const filename = req.params.filename;
+  
+  // Validate directory and filename to prevent directory traversal
+  if (directory.includes("..") || directory.includes("/") || directory.includes("\\") ||
+      filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+    return res.status(400).json({ error: "Invalid path" });
+  }
+  
+  const filepath = path.join(STORAGE_DIR, directory, filename);
+  
   if (!fs.existsSync(filepath)) {
     return res.status(404).json({ error: "File not found" });
+  }
+  
+  // Check if it's actually a file
+  if (!fs.statSync(filepath).isFile()) {
+    return res.status(400).json({ error: "Not a file" });
   }
 
   // Determine content type based on file extension
   const ext = path.extname(filepath).toLowerCase();
   let contentType = "application/octet-stream";
-  let contentDisposition = `attachment; filename="${path.basename(filename)}"`;
+  let contentDisposition = `attachment; filename="${filename}"`;
 
   if (ext === ".png" || ext === ".jpg" || ext === ".jpeg") {
     contentType = ext === ".png" ? "image/png" : "image/jpeg";
-    contentDisposition = `inline; filename="${path.basename(filename)}"`;
+    contentDisposition = `attachment; filename="${filename}"`;
   } else if (ext === ".h264" || ext === ".mp4") {
     contentType = "video/h264";
   }
@@ -208,11 +251,7 @@ app.get("/storage/:filename", (req, res) => {
   res.setHeader("Content-Type", contentType);
   res.setHeader("Content-Disposition", contentDisposition);
 
-  // For image files, force download by setting Content-Disposition to attachment
-  // (the header is already set above; just stream the file)
-  if (ext === ".png" || ext === ".jpg" || ext === ".jpeg") {
-    res.setHeader("Content-Disposition", `attachment; filename="${path.basename(filename)}"`);
-  }
+  // Stream the file
   const fileStream = fs.createReadStream(filepath);
   fileStream.pipe(res);
 });
@@ -277,6 +316,7 @@ app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
   console.log(`Storage directory: ${STORAGE_DIR}`);
   console.log(`Images directory: ${IMAGES_DIR}`);
+  console.log(`Recordings directory: ${RECORDINGS_DIR}`);
   console.log(`Firmware directory: ${FIRMWARE_DIR}`);
 });
 
