@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 
 /**
  * ApiBuilder
@@ -30,6 +30,14 @@ export function ApiBuilder({
   const [verb, setVerb] = useState(initialVerb);
   const [operationId, setOperationId] = useState(initialOperationId);
   const [fieldValues, setFieldValues] = useState(initialValues);
+  const initializedFromPropsRef = useRef(false);
+  const hasValidBuiltStepRef = useRef(false);
+  const initialOperationIdRef = useRef(initialOperationId);
+  
+  // Update ref when initialOperationId changes
+  useEffect(() => {
+    initialOperationIdRef.current = initialOperationId;
+  }, [initialOperationId]);
 
   // Filter operations by current verb
   const operationsForVerb = useMemo(
@@ -43,27 +51,88 @@ export function ApiBuilder({
     [operationsForVerb, operationId]
   );
 
-  // When verb changes, reset operation + fields
+  // Track if we've initialized from props (only once on mount)
+  // This prevents clearing fieldValues that were set via initialValues
   useEffect(() => {
+    if (Object.keys(initialValues).length > 0) {
+      initializedFromPropsRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount - intentionally not including initialValues
+
+  // When verb changes, reset operation + fields
+  // But preserve operationId if it's still valid for the new verb
+  useEffect(() => {
+    // Don't reset if we have initialOperationId and the operation is still valid
+    if (initialOperationId && operationId === initialOperationId) {
+      const opsForNewVerb = operations.filter((op) => op.verb === verb);
+      const opStillValid = opsForNewVerb.some((op) => op.id === initialOperationId);
+      if (opStillValid) {
+        return; // Keep the operation
+      }
+    }
+    // Otherwise reset
     setOperationId(null);
     setFieldValues({});
+    initializedFromPropsRef.current = false;
+    hasValidBuiltStepRef.current = false;
   }, [verb]);
 
-  // When operation changes, reset fieldValues and pre-fill defaults
+  // When operation changes, merge defaults with existing fieldValues
+  // This preserves initialValues that were passed in
   useEffect(() => {
     if (!selectedOperation) {
+      // If we've initialized from props, don't clear - preserve imported values
+      if (initializedFromPropsRef.current) {
+        return;
+      }
+      // Only clear if we truly have no operation and no initial values
       setFieldValues({});
       return;
     }
 
-    const defaults = {};
-    (selectedOperation.fields || []).forEach((field) => {
-      if (field.defaultValue !== undefined) {
-        defaults[field.name] = field.defaultValue;
+    // Use functional update to access current fieldValues state
+    setFieldValues((prev) => {
+      // If we already have values from initialValues, preserve them
+      if (initializedFromPropsRef.current && Object.keys(prev).length > 0) {
+        // Only add defaults for fields that are missing
+        const defaults = {};
+        (selectedOperation.fields || []).forEach((field) => {
+          if (field.defaultValue !== undefined && prev[field.name] === undefined) {
+            defaults[field.name] = field.defaultValue;
+          }
+        });
+
+        if (Object.keys(defaults).length > 0) {
+          return {
+            ...prev, // Existing values first (preserve them)
+            ...defaults, // Then add defaults for missing fields
+          };
+        }
+        // No changes needed
+        return prev;
       }
+
+      // Normal case: merge defaults with existing values
+      const defaults = {};
+      (selectedOperation.fields || []).forEach((field) => {
+        if (field.defaultValue !== undefined && prev[field.name] === undefined) {
+          defaults[field.name] = field.defaultValue;
+        }
+      });
+
+      if (Object.keys(defaults).length > 0) {
+        return {
+          ...prev,
+          ...defaults,
+        };
+      }
+
+      return prev;
     });
-    setFieldValues(defaults);
-  }, [selectedOperation]);
+
+    initializedFromPropsRef.current = true;
+  }, [selectedOperation]); // Don't include initialValues - it's a new object on every render
 
   // Build the object that parent cares about
   const builtStep = useMemo(() => {
@@ -84,11 +153,27 @@ export function ApiBuilder({
   }, [verb, selectedOperation, fieldValues]);
 
   // Notify parent whenever the built step changes
+  // Store onChange in a ref to avoid dependency issues
+  const onChangeRef = useRef(onChange);
   useEffect(() => {
-    if (onChange) {
-      onChange(builtStep);
+    onChangeRef.current = onChange;
+  });
+
+  useEffect(() => {
+    if (!onChangeRef.current) return;
+
+    if (builtStep !== null) {
+      hasValidBuiltStepRef.current = true;
+      onChangeRef.current(builtStep);
+    } else if (initialOperationIdRef.current === null) {
+      // Only send null if we don't have an initialOperationId
+      // This prevents clearing imported steps that should have a valid operation
+      onChangeRef.current(builtStep);
     }
-  }, [builtStep]);
+    // If builtStep is null but we have initialOperationId, don't send null
+    // (the operation should be restored soon)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [builtStep]); // Only depend on builtStep - use refs for onChange and initialOperationId
 
   const handleFieldChange = (name, value) => {
     setFieldValues((prev) => ({

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { ApiBuilder } from "./ApiBuilder";
 import { CGI_OPERATIONS } from "../config/cgiOperations";
 
@@ -18,8 +18,40 @@ function CameraApiBuilder() {
   const [bundleResult, setBundleResult] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    console.log("Current steps", steps);
+  }, [steps]);
+
+  // Helper function to extract field values from a builtStep's query
+  // by removing fixed params that come from the operation definition
+  const extractFieldValues = (builtStep) => {
+    if (!builtStep || !builtStep.query) return {};
+
+    // Find the operation to get its fixed params
+    const operation = CGI_OPERATIONS.find(
+      (op) => op.id === builtStep.operationId && op.verb === builtStep.verb
+    );
+
+    if (!operation) {
+      // If operation not found, return the query as-is (fallback)
+      return builtStep.query;
+    }
+
+    // Remove fixed params to get only user-editable field values
+    const fixedParams = operation.fixedParams || {};
+    const fieldValues = { ...builtStep.query };
+    
+    Object.keys(fixedParams).forEach((key) => {
+      delete fieldValues[key];
+    });
+
+    return fieldValues;
+  };
 
   const addStep = () => {
+    console.log("Adding step");
     setSteps((prev) => [
       ...prev,
       { id: Date.now(), builtStep: null }, // simple unique id
@@ -27,10 +59,12 @@ function CameraApiBuilder() {
   };
 
   const removeStep = (id) => {
+    console.log("Removing step", id);
     setSteps((prev) => prev.filter((step) => step.id !== id));
   };
 
   const handleStepChange = (id, builtStep) => {
+    console.log("Step changed", id, builtStep);
     setSteps((prev) =>
       prev.map((step) =>
         step.id === id ? { ...step, builtStep } : step
@@ -90,6 +124,74 @@ function CameraApiBuilder() {
       ...prev,
       [field]: field === "port" ? Number(value) || 0 : value,
     }));
+  };
+
+  const handleExport = () => {
+    const exportData = {
+      steps: steps.map((s) => s.builtStep).filter((s) => s != null),
+      version: "1.0",
+      exportedAt: new Date().toISOString(),
+    };
+
+    const jsonString = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonString], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `camera-api-builder-${new Date().toISOString().split("T")[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const importData = JSON.parse(text);
+
+      // Validate the imported data structure
+      if (!importData.steps || !Array.isArray(importData.steps)) {
+        setError("Invalid import file: missing or invalid steps array");
+        return;
+      }
+
+      // Restore steps - create new IDs for each step
+      const baseId = Date.now();
+      const importedSteps = importData.steps.map((builtStep, index) => ({
+        id: baseId + index,
+        builtStep: builtStep,
+      }));
+
+      // If no valid steps, create at least one empty step
+      if (importedSteps.length === 0) {
+        setSteps([{ id: baseId, builtStep: null }]);
+        console.log("No valid steps, created one empty step");
+      } else {
+        // Update state with imported steps
+        console.log("Imported steps:", importedSteps);
+        setSteps(importedSteps);
+      }
+
+      // Clear any previous errors
+      setError(null);
+      setBundleResult(null);
+
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch (err) {
+      console.error("Import error:", err);
+      setError(`Failed to import: ${err.message || "Invalid JSON file"}`);
+    }
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
   };
 
   return (
@@ -192,19 +294,41 @@ function CameraApiBuilder() {
           </div>
 
           <ApiBuilder
+            key={step.id}
             operations={CGI_OPERATIONS}
+            initialVerb={step.builtStep?.verb || "get"}
+            initialOperationId={step.builtStep?.operationId || null}
+            initialValues={extractFieldValues(step.builtStep)}
             onChange={(builtStep) => handleStepChange(step.id, builtStep)}
           />
         </div>
       ))}
 
-      <button onClick={addStep} style={{ marginRight: "0.5rem" }}>
-        + Add Step
-      </button>
+      <div style={{ marginBottom: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <button onClick={addStep}>
+          + Add Step
+        </button>
 
-      <button onClick={handleRunBundle}>
-        Run Bundle
-      </button>
+        <button onClick={handleRunBundle}>
+          Run Bundle
+        </button>
+
+        <button onClick={handleExport} style={{ marginLeft: "0.5rem" }}>
+          Export Steps
+        </button>
+
+        <button onClick={handleImportClick}>
+          Import Steps
+        </button>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json"
+          onChange={handleImport}
+          style={{ display: "none" }}
+        />
+      </div>
 
       <div style={{ marginTop: "1.5rem" }}>
         <h2>Current Bundle Snapshot</h2>
