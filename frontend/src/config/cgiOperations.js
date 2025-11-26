@@ -310,7 +310,7 @@ export const CGI_OPERATIONS = [
   {
     id: "record.playback",
     group: "Recording",
-    verb: "operate",
+    verb: "get",
     label: "Playback Recording (by time)",
     cgiPath: "/cgi-bin/record.cgi",
     method: "GET",
